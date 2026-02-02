@@ -8,27 +8,27 @@ struct resultHoist
     has_stuff
 end
 
-function main()
-    W = 12
-    R = 3
-    N = [12, 8, 8]
+function main(W,R,N,Capacity,V,L,U)
+    # W = 12
+    # R = 3
+    # N = [12, 8, 8]
 
-    Capacity = ones(Int,W)
-    Capacity[2] = 2
-    Capacity[7] = 3
-    Capacity[8] = 2
+    # Capacity = ones(Int,W)
+    # Capacity[2] = 2
+    # Capacity[7] = 3
+    # Capacity[8] = 2
 
-    V = [ 1   2   3   4   5   6   7    8    9  10  11  12;
-          1   2   4   5   7   8   11   12   0  0   0   0 ;
-          1   3   5   7   8   9   10   12   0  0   0   0 ]
+    # V = [ 1   2   3   4   5   6   7    8    9  10  11  12;
+    #       1   2   4   5   7   8   11   12   0  0   0   0 ;
+    #       1   3   5   7   8   9   10   12   0  0   0   0 ]
 
-    L = [ 30 150  60  60  30  40 350  90  70  45  60  30;
-          30 130  30  40 420  50  90  70   0   0   0   0;
-          30  80  40 300  50  90  90  70   0   0   0   0]
+    # L = [ 30 150  60  60  30  40 350  90  70  45  60  30;
+    #       30 130  30  40 420  50  90  70   0   0   0   0;
+    #       30  80  40 300  50  90  90  70   0   0   0   0]
 
-    U = [ 60 350  90 120  75 120 800 160 200  90 120  80;
-          50 280  70  90 850 120 160 200   0   0   0   0;
-          50 220  90 550 120 150 160 200   0   0   0   0]
+    # U = [ 60 350  90 120  75 120 800 160 200  90 120  80;
+    #       50 280  70  90 850 120 160 200   0   0   0   0;
+    #       50 220  90 550 120 150 160 200   0   0   0   0]
 
     function Qlamda(y) 
         return getindex.(findall(x -> x == y[2] , y[1]),[1 2]) 
@@ -55,6 +55,10 @@ function main()
 
     M = 5000
     m = Model(HiGHS.Optimizer)
+    
+    set_attribute(m, "presolve", "on")
+    set_attribute(m, "time_limit", 150.0)
+
     @variable(m, T, Int)
     @variable(m, s[r = 1:R, i = 1:N[r]] .>= 0, Int)
     # @variable(m, t[r = 1:R, i = 1:N[r]], Int)
@@ -96,12 +100,10 @@ function main()
     # 決定変数 T が決定変数 z と y に掛け算されてるので2次であり線形ではないため.
     # これの線形化のテクニックは別途調べる.
 
+    # Σ の挙動を考えると Σⁿₖ₌₁  k=nの時も実行されるので、 for k = 1:0 にしてはいけない。 k = 1:0 だと実行されないため。
     # @constraint(m,
-    #             [r = 1:R, i = 2:N[r], k = 1:Capacity[V[r,i]]],
-    #             t[r,i] >= s[r,i] - s[r,i-1] - D[r,i-1] + (k-1)*T) - M*(2 - y[r,i-1,r,i] - z[r,i,k])
-    # # @constraint(m,
-    #             [r = 1:R, i = 2:N[r], k = 1:Capacity[V[r,i]]],
-    #             t[r,i] <= s[r,i] - s[r,i-1] - D[r,i-1] + k*T)
+    # [r = 1:R, i = 2:N[r]],
+    # sum([(k-1)* z[r,i,k] for k in 1:Capacity[V[r,i]]] ) - y[r,i,r,i-1]  >= 0)
 
     #(5.16) 
     @constraint(m,
@@ -130,16 +132,17 @@ function main()
                 [r = 1:R, i = 2:N[r]],
                 sum(sum((k-1)*z[u,j,k] for k = 1:Capacity[V[r,i]]) + y[u,j,u,j-1] - y[u,j,r,i-1] for (u,j) in Q[V[r,i]] if j > 1) 
                 + sum(y[u,j-1,r,i-1] for (u,j) in setdiff(Q[V[r,i]], Set(((r,i),))) ) 
-                <= Capacity[V[r,i]])
+                <= Capacity[V[r,i]]-1)
     #(5.27)
     @constraint(m,
-                [r = 2:R, u = 2:R, i = 2:N[r], j = 2:N[u]; (r != u || i != j && V[r,i] == V[u,j])],
+                [r = 2:R, u = 2:R, i = 2:N[r], j = 2:N[u]; ((r != u || i != j) && V[r,i] == V[u,j])],
                 y[r,i-1,r,i] + y[u,j-1,u,j] + y[r,i,u,j-1] + y[u,j,r,i-1] == 3)
     #(5.28)
     @constraint(m,
                 [r = 1:R, i = 1:N[r]],
                 s[r,i] >= 0)
     #(5.29)
+
     #(5.30)
 
     #(5.31)
@@ -150,17 +153,23 @@ function main()
     # start_time = Array{Tuple{Int64, Int64}, Int64}(R,W)
                      # Dcit(zip(a,b))でもいい
 
-    l(r,i) = sum([k*value(z[r,i,k]) for k in 1:Capacity[V[r,i]]-1] ) - value(y[r,i,r,i-1])
+    l(r,i) = sum([k*value(z[r,i,k]) for k in 1:Capacity[V[r,i]]] ) - value(y[r,i,r,i-1])
     t(r,i) = value(s[r,i]) - value(s[r,i-1]) - D[r,i-1] + l(r,i) * value(T)
+
+    for ((r,i),) in s.data
+        if i != 1
+        println("l($(r),$(i)) = ", l(r,i))
+        end
+    end
 
     start_time = Dict([((r,i) => round(value(s[r,i]))) for ((r,i),) in s.data])
     routes     = Dict([((r,i) => V[r,i]) for ((r,i),) in s.data])
     actual_time =  Dict([((r,i) =>  (i != 1) ? round(t(r,i)) : 0) for ((r,i),) in s.data])
+    
     # sort(start_time; byvalue = true)
     return sort(start_time; byvalue = true), routes, actual_time    
 end
 
-st, rt, at = main()
 
 #############################################################
 W = 12
@@ -184,6 +193,8 @@ U = [ 60 350  90 120  75 120 800 160 200  90 120  80;
       50 280  70  90 850 120 160 200   0   0   0   0;
       50 220  90 550 120 150 160 200   0   0   0   0]
 
+st, rt, at = main(W,R,N,Capacity,V,L,U)
+
 E = zeros(Int,(W+1,W+1)) # 空荷移動
 for i in 1:W, j in 1:W+1
     E[i,i+1] = 2
@@ -192,6 +203,7 @@ for i in 1:W, j in 1:W+1
         E[j,i] = E[i,j]
     end
 end
+
 
 D = zeros(Int,(R,W+1))  # 荷移動
 for r in 1:R, i in 1:N[r]-1
@@ -219,7 +231,7 @@ for (count,(r,i)) in enumerate(keys(st))
     end
 
     # 空荷移動は破線, これ以降は時間でソートされてる前提. unloadした後に別のものをloadするときを想定しているため.
-    if  ((r == rz1) && abs(i - iz1) > 1) || (r != rz1) && iz1 != N[rz1] && count != 1 && count != length(st)
+    if  ((r == rz1) && abs(i - iz1) > 1 && iz1 != N[rz1]) || (r != rz1) && iz1 != N[rz1] && count != 1 && count != length(st)
         lines!(ax, [st[rz1,iz1]+E[rt[rz1,iz1],rt[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [rt[rz1,iz1+1], rt[r,i]], linestyle = :dash; color = :black)
     elseif i == N[r]
         lines!(ax, [st[r,i], st[r,i]+E[V[r,i],V[r,1]]], [rt[r,i], rt[r,1]], linestyle = :dash; color = :black)
@@ -227,6 +239,7 @@ for (count,(r,i)) in enumerate(keys(st))
 
     # 横棒は色付き
     if (i != N[r])
+        println("actual_time[$(r),$(i)] = ", at[r,i])
     # 同じパーツが次のところに移動するときは実線
         lines!(ax, [st[r,i] - at[r,i], st[r,i] ], [rt[r,i], rt[r,i]]; color = c[r]) 
     end
