@@ -1,4 +1,4 @@
-Attempt to implement the algorithm described in the following thisis
+Attempt to implement the algorithm described in the following thesis
 
 Title  : Modélisation et optimisation des Hoist Scheduling Problems  
 Author : Jianguang Feng  
