@@ -8,7 +8,5 @@ Author : Jianguang Feng
 How to execute
 
 1. install Julia ([https://julialang.org](https://julialang.org))
-2. import Pkg; Pkg.add("HiGHS"), Pkg.add("JuMP"), Pkg.add("CairoMakie")
-
-then,
-`julia hoist_cyclic.jl`
+2. import Pkg; Pkg.add("HiGHS"), Pkg.add("JuMP"), Pkg.add("GLMakie")
+3. execute julia `julia hoist_cyclic.jl`
