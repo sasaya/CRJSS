@@ -179,34 +179,36 @@ Capacity[8] = 2
 #      1   2   4   5   7   8   11   12   13  0   0   0  0;
 #      1   3   5   7   8   9   10   12   13  0   0   0  0]
 
-V = [1   2   3   4   5   6   7    8    9  10  11  12 13;
+const V = 
+    [1   2   3   4   5   6   7    8    9  10  11  12 13;
      1   2   4   5   7   8   11   12   13  0   0   0  0;
      1   3  11   7   8   9   10   12   13  0   0   0  0]
 
-L = [0 30 150  60  60  30  40 350  90  70  45  60  30  0;
+const L = 
+    [0 30 150  60  60  30  40 350  90  70  45  60  30  0;
      0 30 130  30  40 420  50  90  70   0   0   0   0  0;
      0 30  80  40 300  50  90  90  70   0   0   0   0  0]
 
-U = [0 60 350  90 120  75 120 800 160 200  90 120  80  0;
+const U = 
+    [0 60 350  90 120  75 120 800 160 200  90 120  80  0;
      0 50 280  70  90 850 120 160 200   0   0   0   0  0;
      0 50 220  90 550 120 150 160 200   0   0   0   0  0]
-
-     
-st, rt, at, y_val, cycletime = main(W,R,N,Capacity,V,L,U,E,D)
 
 E = maximum(W)+1 |> x -> zeros(Int,(x,x))
 for i in W, j in i:maximum(W)+1
     E[i,i+1] = 2
     if (j > i)
-        E[i,j] = 2 * abs((j-1) - i)
+        E[i,j] = sum(E[k,k+1] for k in 1:j-1)
         E[j,i] = E[i,j]
     end
 end
 
 D = zeros(Int,(R,maximum(W)+1))
-for r in 1:R, i in 1:N[r]-1
+for r in 1:R, i in 1:N[r]
     D[r,i] = E[V[r,i], V[r,i+1]] + 20
 end
+
+st, rt, at, y_val, cycletime = main(W,R,N,Capacity,V,L,U,E,D)
 #############################################################
 
 fig = Figure()
@@ -215,7 +217,7 @@ ax = Axis(fig[1,1])
 
 # lines!(ax,
 #         get.(Ref(st), keys(st), missing),
-#         get.(Ref(rt), keys(st), missing)
+#         get.(Ref(V), keys(st), missing)
 #     )
 rz1 = 1
 iz1 = 1
@@ -225,32 +227,32 @@ c = [:red, :blue, :green]
 for (count,(r,i)) in enumerate(keys(st))
     if (i != N[r])
     # 同じパーツが次のところに移動するときは実線
-        lines!(ax, [st[r,i], st[r,i] + D[r,i]], [rt[r,i], rt[r,i+1]]; color = :black)
-        text!(ax,st[r,i] + D[r,i], rt[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+        lines!(ax, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
+        text!(ax,st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
     end
 
     # 空荷移動は破線, これ以降は時間でソートされてる前提. unloadした後に別のものをloadするときを想定しているため.
-    if  ((r == rz1) && abs(i - iz1) > 1  && iz1 != N[rz1]) || (r != rz1) && iz1 != N[rz1] && count != 1 && count != length(st)
-        lines!(ax, [st[rz1,iz1]+E[rt[rz1,iz1+1],rt[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [rt[rz1,iz1+1], rt[r,i]], linestyle = :dash; color = :black)
+    if  ((r == rz1) && abs(i - iz1) > 1  && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
+        lines!(ax, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
     elseif iz1 == N[rz1]
-        lines!(ax, [st[rz1,iz1], st[r,i]], [rt[rz1,iz1], rt[r,i]], linestyle = :dash; color = :black)
+        lines!(ax, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
     else
-        lines!(ax, [st[rz1,iz1]+D[rz1,iz1], st[r,i]], [rt[rz1,iz1+1], rt[r,i]], linestyle = :dash; color = :black)
+        lines!(ax, [st[rz1,iz1]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
     end
 
     # 横棒は色付き
-    if (i != N[r])
+    if (i <= N[r])
         println("actual_time[$(r),$(i)] = ", at[r,i])
     # 同じパーツが次のところに移動するときは実線
     if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
-        lines!(ax, [st[r,i] - at[r,i], st[r,i] ], [rt[r,i] + (r-1)*0.025, rt[r,i] + (r-1)*0.025]; color = c[r]) 
+        lines!(ax, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
     else
-        lines!(ax, [0, st[r,i] ], [rt[r,i] + (r-1)*0.025, rt[r,i] + (r-1)*0.025]; color = c[r]) 
-        lines!(ax, [cycletime + (st[r,i] - at[r,i]), cycletime], [rt[r,i] + (r-1)*0.025, rt[r,i] + (r-1)*0.025]; color = c[r]) 
+        lines!(ax, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
+        lines!(ax, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
     end
     end
 
-    text!(ax,st[r,i], rt[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :bottom))
+    text!(ax,st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
     global rz1 = r
     global iz1 = i
 
