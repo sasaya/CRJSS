@@ -1,13 +1,5 @@
 using JuMP, HiGHS, GLMakie #CairoMakie
 
-
-struct resultHoist
-    hoist_move_starttime
-    to
-    from
-    has_stuff
-end
-
 function main(W,R,N,Capacity,V,L,U,E,D)
     # W = 12
     # R = 3
@@ -237,10 +229,12 @@ for (count,(r,i)) in enumerate(keys(st))
     end
 
     # 空荷移動は破線, これ以降は時間でソートされてる前提. unloadした後に別のものをloadするときを想定しているため.
-    if  ((r == rz1) && abs(i - iz1) > 1 && iz1 != N[rz1]) || (r != rz1) && iz1 != N[rz1] && count != 1 && count != length(st)
+    if  ((r == rz1) && abs(i - iz1) > 1  && iz1 != N[rz1]) || (r != rz1) && iz1 != N[rz1] && count != 1 && count != length(st)
         lines!(ax, [st[rz1,iz1]+E[rt[rz1,iz1+1],rt[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [rt[rz1,iz1+1], rt[r,i]], linestyle = :dash; color = :black)
-    elseif i == N[r]
-        lines!(ax, [st[r,i], st[r,i]+E[V[r,i],V[r,1]]], [rt[r,i], rt[r,1]], linestyle = :dash; color = :black)
+    elseif iz1 == N[rz1]
+        lines!(ax, [st[rz1,iz1], st[r,i]], [rt[rz1,iz1], rt[r,i]], linestyle = :dash; color = :black)
+    else
+        lines!(ax, [st[rz1,iz1]+D[rz1,iz1], st[r,i]], [rt[rz1,iz1+1], rt[r,i]], linestyle = :dash; color = :black)
     end
 
     # 横棒は色付き
