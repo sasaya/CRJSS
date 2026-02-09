@@ -31,25 +31,11 @@ function main(W,R,N,Capacity,V,L,U,E,D)
         println("r=",r,", i=",i)
     end
      
-    # E = maximum(W)+1 |> x -> zeros(Int,(x,x))
-    # for i in W, j in i:maximum(W)+1
-    #     E[i,i+1] = 2
-    #     if (j > i)
-    #         E[i,j] = 2 * ((j-1) - i)
-    #         E[j,i] = E[i,j]
-    #     end
-    # end
-
-    # D = zeros(Int,(R,maximum(W)+1))
-    # for r in 1:R, i in 1:N[r]-1
-    #     D[r,i] = E[V[r,i], V[r,i+1]] + 20
-    # end
-
     M = 5000
     m = Model(HiGHS.Optimizer)
     
     set_attribute(m, "presolve", "on")
-    set_attribute(m, "time_limit", 36000.0)
+    set_attribute(m, "time_limit", 600.0)
 
     @variable(m, T, Int)
     @variable(m, s[r = 1:R, i = 1:N[r]] .>= 0, Int)
@@ -164,6 +150,16 @@ function main(W,R,N,Capacity,V,L,U,E,D)
     return sort(start_time; byvalue = true), routes, actual_time, y_values, value(T)
 end
 
+struct cyclic_hoist_schedule
+    hoist_move_starttime::Dict{Tuple{Int,Int},Int}
+    to::Dict{Tuple{Int,Int},Int}
+    from::Dict{Tuple{Int,Int},Int}
+    has_stuff::Dict{Tuple{Int,Int},Bool}
+end
+
+function main(input::cyclic_hoist_schedule) 
+    main(W,R,N,Capacity,V,L,U,E,D)
+end
 
 #############################################################
 W = 1:12
@@ -179,9 +175,13 @@ Capacity[8] = 2
 #       1   2   4   5   7   8   11   12   0  0   0   0 ;
 #       1   3   5   7   8   9   10   12   0  0   0   0 ]
 
+# V = [1   2   3   4   5   6   7    8    9  10  11  12 13;
+#      1   2   4   5   7   8   11   12   13  0   0   0  0;
+#      1   3   5   7   8   9   10   12   13  0   0   0  0]
+
 V = [1   2   3   4   5   6   7    8    9  10  11  12 13;
      1   2   4   5   7   8   11   12   13  0   0   0  0;
-     1   3   5   7   8   9   10   12   13  0   0   0  0]
+     1   3  11   7   8   9   10   12   13  0   0   0  0]
 
 L = [0 30 150  60  60  30  40 350  90  70  45  60  30  0;
      0 30 130  30  40 420  50  90  70   0   0   0   0  0;
@@ -191,13 +191,14 @@ U = [0 60 350  90 120  75 120 800 160 200  90 120  80  0;
      0 50 280  70  90 850 120 160 200   0   0   0   0  0;
      0 50 220  90 550 120 150 160 200   0   0   0   0  0]
 
+     
 st, rt, at, y_val, cycletime = main(W,R,N,Capacity,V,L,U,E,D)
 
 E = maximum(W)+1 |> x -> zeros(Int,(x,x))
 for i in W, j in i:maximum(W)+1
     E[i,i+1] = 2
     if (j > i)
-        E[i,j] = 2 * ((j-1) - i)
+        E[i,j] = 2 * abs((j-1) - i)
         E[j,i] = E[i,j]
     end
 end
