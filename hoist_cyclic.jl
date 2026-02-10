@@ -194,11 +194,11 @@ const U =
      0 50 280  70  90 850 120 160 200   0   0   0   0  0;
      0 50 220  90 550 120 150 160 200   0   0   0   0  0]
 
-E = maximum(W)+1 |> x -> zeros(Int,(x,x))
+E = maximum(W)+1 |> x -> fill(2,(x,x))
 for i in W, j in i:maximum(W)+1
-    E[i,i+1] = 2
+    E[j,j] = 0
     if (j > i)
-        E[i,j] = sum(E[k,k+1] for k in 1:j-1)
+        E[i,j] = sum(E[k,k+1] for k in i:j-1)
         E[j,i] = E[i,j]
     end
 end
@@ -214,6 +214,8 @@ st, rt, at, y_val, cycletime = main(W,R,N,Capacity,V,L,U,E,D)
 fig = Figure()
 
 ax = Axis(fig[1,1])
+axbottom = Axis(fig[2, 1], yticks = ([1], [""]), ylabel = "Handling",)
+linkxaxes!(ax, axbottom)
 
 # lines!(ax,
 #         get.(Ref(st), keys(st), missing),
@@ -225,19 +227,33 @@ iz1 = 1
 c = [:red, :blue, :green]
 
 for (count,(r,i)) in enumerate(keys(st))
-    if (i != N[r])
+    start = 0
+    stop = 0
+
+    if (i <= N[r])
     # 同じパーツが次のところに移動するときは実線
         lines!(ax, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
         text!(ax,st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+        
+        start = st[r,i]
+        stop = start + D[r,i]
+        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[r])
     end
+
 
     # 空荷移動は破線, これ以降は時間でソートされてる前提. unloadした後に別のものをloadするときを想定しているため.
     if  ((r == rz1) && abs(i - iz1) > 1  && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
         lines!(ax, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+
+        start = st[rz1,iz1] + E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1]
+        stop = st[r,i]
+        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[rz1])
     elseif iz1 == N[rz1]
         lines!(ax, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
-    else
-        lines!(ax, [st[rz1,iz1]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+
+        start = st[rz1,iz1]
+        stop =  st[r,i]
+        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[rz1])
     end
 
     # 横棒は色付き
@@ -253,8 +269,10 @@ for (count,(r,i)) in enumerate(keys(st))
     end
 
     text!(ax,st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
+
     global rz1 = r
     global iz1 = i
 
 end
+rowsize!(fig.layout,2, Auto(0.1))
 fig
