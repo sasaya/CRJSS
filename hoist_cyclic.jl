@@ -1,36 +1,22 @@
 using JuMP, HiGHS, GLMakie #CairoMakie
+using JSON
 
-function main(W,R,N,Capacity,V,L,U,E,D)
-    # W = 12
-    # R = 3
-    # N = [12, 8, 8]
-
-    # Capacity = ones(Int,W)
-    # Capacity[2] = 2
-    # Capacity[7] = 3
-    # Capacity[8] = 2
-
-    # V = [ 1   2   3   4   5   6   7    8    9  10  11  12;
-    #       1   2   4   5   7   8   11   12   0  0   0   0 ;
-    #       1   3   5   7   8   9   10   12   0  0   0   0 ]
-
-    # L = [ 30 150  60  60  30  40 350  90  70  45  60  30;
-    #       30 130  30  40 420  50  90  70   0   0   0   0;
-    #       30  80  40 300  50  90  90  70   0   0   0   0]
-
-    # U = [ 60 350  90 120  75 120 800 160 200  90 120  80;
-    #       50 280  70  90 850 120 160 200   0   0   0   0;
-    #       50 220  90 550 120 150 160 200   0   0   0   0]
-
+function main(W,R,N,Capacity,V,L,U,E,D;num_of_hoist = 1:2)
     function Qlamda(y) 
         return getindex.(findall(x -> x == y[2] , y[1]),[1 2]) 
     end
 
-    Q = [Qlamda((V,x)) |> x -> tuple.(eachcol(x)...) |> Set  for x in W]  
+    Q = (
+        [w for w in W] # 入力データ
+        .|> x-> Qlamda((V,x))  # Vに含まれるxのインデックスを探す 1が r=3,i=1にあるなら[3,1]が返る
+        |> x -> tuple.(eachcol(x)...) # 上で帰ってくるのはMatrixなので行ごとにタプル化
+        |> x -> filter(x->(N[x[1]] >= x[2]),x) # 余分な末尾の切り落とし
+        |>Set  ) # 最後は集合にしておわり
     for (r,i) ∈  Q[1]
         println("r=",r,", i=",i)
     end
-     
+
+    
     M = 5000
     m = Model(HiGHS.Optimizer)
     
@@ -39,15 +25,33 @@ function main(W,R,N,Capacity,V,L,U,E,D)
 
     @variable(m, T, Int)
     @variable(m, s[r = 1:R, i = 1:N[r]] .>= 0, Int)
-    # @variable(m, t[r = 1:R, i = 1:N[r]], Int)
     @variable(m, z[r = 1:R, i = 1:N[r], k = 1:Capacity[V[r,i]]], Bin)
     @variable(m, y[r = 1:R, i = 1:N[r], u = 1:R, j = 1:N[u]], Bin)
     
+    @variable(m, x[r = 1:R, i = 1:N[r], k = num_of_hoist], Bin)
+    @constraint(m, 
+                [r = 1:R, i = 1:N[r]],
+                sum(x[r,i,k] for k in num_of_hoist) == 1)
+
+    # #(5.3)
+    # @constraint(m,
+    #             [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u]; (r != u || i != j)], 
+    #             s[u,j] - s[r,i] >= D[r,i] + E[V[r,i+1],V[u,j]] - M*(1-y[r,i,u,j]))
     
-    #(5.3)
+    # 途中経過
+    # @constraint(m,
+    #             [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u]; (r != u || i != j)], 
+    #             s[u,j] - s[r,i] >= D[r,i] + E[V[r,i+1],V[u,j]] - M*(2-y[r,i,u,j] - x[r,i,1]))
+    
     @constraint(m,
-                [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u]; (r != u || i != j)], 
-                s[u,j] - s[r,i] >= D[r,i] + E[V[r,i+1],V[u,j]] - M*(1-y[r,i,u,j]))
+                [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u], k = num_of_hoist; (r != u || i != j)], 
+                s[u,j] - s[r,i] >= D[r,i] + E[V[r,i+1],V[u,j]] - M*( 3 - y[r,i,u,j] - x[r,i,k] - x[u,j,k]))
+    
+    δ = 5 # r,iとu,jの搬送開始をどれだけずらすかのパラメータ
+    @constraint(m,
+                [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u], k = num_of_hoist; (r != u || i != j)], 
+                s[u,j] - s[r,i] >= δ - M*( 3 - y[r,i,u,j] - x[r,i,k] - sum(x[u,j,l] for l in num_of_hoist if l != k)))
+    
     #(5.4)
     @constraint(m, 
                 [r = 1:R, u = 1:R, i = 1:N[r], j = 1:N[u]; (r != u || i != j)],
@@ -56,15 +60,12 @@ function main(W,R,N,Capacity,V,L,U,E,D)
     #(5.5)
     @constraint(m, s[1,1] == 0)
     
-    #(5.6)
-    # @constraint(m, s[r,i] >= D[1,1])
-
     #(5.7)
     @constraint(m,
                 [r =1:R, i = 1:N[r]],
                 T >= s[r,i] + D[r,i] + E[V[r,i+1],1])
 
-    #(5.8) zのindexとしてのkと, サイクルTの係数としてのkの値は1つずれる(Juliaのindexが1始まりだから.)
+    #(5.8)
     @constraint(m,
                 [r = 1:R, i = 2:N[r]],
                 sum(z[r,i,k] for k = 1:Capacity[V[r,i]]) == 1)
@@ -119,17 +120,11 @@ function main(W,R,N,Capacity,V,L,U,E,D)
     @constraint(m,
                 [r = 1:R, i = 1:N[r]],
                 s[r,i] >= 0)
-    #(5.29)
-
-    #(5.30)
 
     #(5.31)
     @objective(m, Min, T)
-    
+    JuMP.write_to_file(m, "model" * ".mps")
     optimize!(m)
-
-    # start_time = Array{Tuple{Int64, Int64}, Int64}(R,W)
-                     # Dcit(zip(a,b))でもいい
 
     l(r,i) = sum([(k-1)*value(z[r,i,k]) for k in 1:Capacity[V[r,i]]] ) + value(y[r,i,r,i-1])
     t(r,i) = value(s[r,i]) - value(s[r,i-1]) - D[r,i-1] + l(r,i) * value(T)
@@ -140,14 +135,22 @@ function main(W,R,N,Capacity,V,L,U,E,D)
         end
     end
 
-    start_time = Dict([((r,i) => round(value(s[r,i]))) for ((r,i),) in s.data])
+    start_time = Dict([((r,i) => round(Int, value(s[r,i]))) for ((r,i),) in s.data])
     routes     = Dict([((r,i) => V[r,i]) for ((r,i),) in s.data])
-    actual_time =  Dict([((r,i) =>  (i != 1) ? round(t(r,i)) : 0) for ((r,i),) in s.data])
+    actual_time =  Dict([((r,i) =>  (i != 1) ? round(Int, t(r,i)) : 0) for ((r,i),) in s.data])
 
     y_values = Dict([((r,i,u,j) => value(y[r,i,u,j])) for ((r,i,u,j),) in y.data])
-    
-    # sort(start_time; byvalue = true)
-    return sort(start_time; byvalue = true), routes, actual_time, y_values, value(T)
+
+    for ((r,i),) in s.data
+        if round(Int,value(x[r,i,1])) == 1
+            println("transfer_resource[$(r),$(i),1] = ", value(transfer_resource[r,i,1]))
+        end
+    end
+    transfer_no = Dict([((r,i,k) => round(Int,value(x[r,i,k]))) for ((r,i,k),) in x.data])
+    # println(value.(x))
+
+    # sortを辞書型に変換して返してはいけない。順序が変わってしまうため。
+    return sort(start_time; byvalue = true), routes, actual_time, y_values, value(T), transfer_no
 end
 
 struct cyclic_hoist_schedule
@@ -161,110 +164,276 @@ function main(input::cyclic_hoist_schedule)
     main(W,R,N,Capacity,V,L,U,E,D)
 end
 
+"""
+    load_input_data(filepath::String) → params_dict
+
+JSONファイルから入力データを読み込み、辞書にまとめたものを返す。
+"""
+function load_input_data(filepath::String)
+    raw = JSON.parsefile(filepath)
+
+    W = Int.(raw["W"])
+    R = raw["R"]
+    N = Int.(raw["N"])
+
+    Capacity = ones(Int, maximum(W))
+    for (k, v) in raw["Capacity"]
+        Capacity[parse(Int, k)] = v isa Integer ? Int(v) : parse(Int, string(v))
+    end
+
+    V = Int.(hcat(raw["V"]...))
+    L = Int.(hcat(raw["L"]...))
+    U = Int.(hcat(raw["U"]...))
+
+    max_w = maximum(W)
+    E = fill(2, (max_w + 1, max_w + 1))
+    for i in W, j in i:max_w+1
+        E[j, j] = 0
+        if j > i
+            E[i, j] = sum(E[k, k+1] for k in i:j-1)
+            E[j, i] = E[i, j]
+        end
+    end
+
+    D = zeros(Int, (R, max_w + 1))
+    for r in 1:R, i in 1:N[r]
+        D[r, i] = E[V[r, i], V[r, i+1]] + 20
+        if ( V[r, i] == V[r, i+1])
+            D[r, i] = 0
+        end
+    end
+
+    return W, R, N, Capacity, V, L, U, E, D
+end
+
+"""
+    read_json(filepath::String)
+
+JSONファイルからデータを読み込んでmain関数を呼び出す。
+"""
+function read_json(filepath::String)
+    W, R, N, Capacity, V, L, U, E, D = load_input_data(filepath)
+    return W, R, N, Capacity, V, L, U, E, D
+end
+
 #############################################################
-W = 1:12
-R = 3
-N = [12, 8, 8]
-
-Capacity = ones(Int,W)
-Capacity[2] = 2
-Capacity[7] = 3
-Capacity[8] = 2
-
-const V = 
-    [1   2   3   4   5   6   7    8    9  10  11  12 13;
-     1   2   4   5   7   8   11   12   13  0   0   0  0;
-     1   3  11   7   8   9   10   12   13  0   0   0  0]
-
-const L = 
-    [0 30 150  60  60  30  40 350  90  70  45  60  30  0;
-     0 30 130  30  40 420  50  90  70   0   0   0   0  0;
-     0 30  80  40 300  50  90  90  70   0   0   0   0  0]
-
-const U = 
-    [0 60 350  90 120  75 120 800 160 200  90 120  80  0;
-     0 50 280  70  90 850 120 160 200   0   0   0   0  0;
-     0 50 220  90 550 120 150 160 200   0   0   0   0  0]
-
-E = maximum(W)+1 |> x -> fill(2,(x,x))
-for i in W, j in i:maximum(W)+1
-    E[j,j] = 0
-    if (j > i)
-        E[i,j] = sum(E[k,k+1] for k in i:j-1)
-        E[j,i] = E[i,j]
-    end
+# デフォルトのデータ定義
+#############################################################
+# コマンドライン引数で入力ファイルを指定する
+if length(ARGS) < 1
+    println("使用方法: julia hoist_cyclic.jl <input_file.json>")
+    input_file = "input_data.json"  # デフォルトの入力ファイル名
+    # exit(1)
+else
+    input_file = ARGS[1]
 end
+println("入力ファイル: ", input_file)
 
-D = zeros(Int,(R,maximum(W)+1))
-for r in 1:R, i in 1:N[r]
-    D[r,i] = E[V[r,i], V[r,i+1]] + 20
-end
+W, R, N, Capacity, V, L, U, E, D = read_json(input_file)
+st, rt, at, y_val, cycletime, transfer_resource = main(W,R,N,Capacity,V,L,U,E,D)
 
-st, rt, at, y_val, cycletime = main(W,R,N,Capacity,V,L,U,E,D)
 #############################################################
 
-fig = Figure()
+"""
+    plot_schedule(st, rt, at, V, L, U, E, D, N, cycletime; colors = [:red, :blue, :green])
 
-ax = Axis(fig[1,1])
-axbottom = Axis(fig[2, 1], yticks = ([1], [""]), ylabel = "Handling",)
-linkxaxes!(ax, axbottom)
+スケジューリング結果をプロットする関数。
 
-# lines!(ax,
-#         get.(Ref(st), keys(st), missing),
-#         get.(Ref(V), keys(st), missing)
-#     )
-rz1 = 1
-iz1 = 1
+# Argumentst
+- `st`: 開始時間のDictまたはOrderedDict
+- `rt`: ルートのDict
+- `at`: 実時間Dict
+- `V`: 作業スケジュール行列
+- `L`: 下限時間制約
+- `U`: 上限時間制約
+- `E`: 移動時間行列
+- `D`: 作業時間行列
+- `N`: 各ロボットの仕事数
+- `cycletime`: サイクルタイム
+- `colors`: ロボットごとの色（オプション）
 
-c = [:red, :blue, :green]
+# Returns
+- `fig`: MakieのFigureオブジェクト
+"""
+function plot_schedule(
+        st,
+        rt::Dict{Tuple{Int,Int},Int},
+        at,
+        V::Matrix{Int},
+        L::Matrix{Int},
+        U::Matrix{Int},
+        E::Matrix{Int},
+        D::Matrix{Int},
+        N::Vector{Int},
+        cycletime,
+        transfer_resource;
+        colors = [:red, :blue, :green]
+    )
 
-for (count,(r,i)) in enumerate(keys(st))
-    start = 0
-    stop = 0
+    fig = Figure()
 
-    if (i <= N[r])
-    # 同じパーツが次のところに移動するときは実線
-        lines!(ax, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
-        text!(ax,st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
-        
-        start = st[r,i]
-        stop = start + D[r,i]
-        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[r])
+    ax = Axis(fig[1,1])
+    ax2 = Axis(fig[2,1])
+    ax3 = Axis(fig[3,1])
+    axbottom = Axis(fig[4, 1], yticks = ([1,2], ["",""]), ylabel = "Handling")
+    linkxaxes!(ax, axbottom)
+    linkxaxes!(ax, ax2)
+    linkxaxes!(ax, ax3)
+
+    rz1 = 1
+    iz1 = 1
+
+    for (count, (r, i)) in enumerate(keys(st))
+        if transfer_resource[r,i,1] == 1
+            if (i <= N[r])
+                lines!(ax, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
+                text!(ax, st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+                
+                barplot!(axbottom, 1, st[r,i] + D[r,i], fillto = st[r,i], direction = :x, color = colors[r])
+            end
+
+            if ((r == rz1) && abs(i - iz1) > 1 && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
+                lines!(ax, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 1, st[r,i], fillto = st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], direction = :x, color = colors[rz1])
+            elseif iz1 == N[rz1]
+                lines!(ax, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 1, st[r,i], fillto = st[rz1,iz1], direction = :x, color = colors[rz1])
+            end
+
+            if (i <= N[r])
+                println("actual_time[$(r),$(i)] = ", at[r,i])
+                if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
+                    lines!(ax, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                else
+                    lines!(ax, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                    lines!(ax, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                end
+            end
+
+            text!(ax, st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
+
+            rz1 = r
+            iz1 = i
+        end
     end
 
+    rz1 = 1
+    iz1 = 1
 
-    # 空荷移動は破線, これ以降は時間でソートされてる前提. unloadした後に別のものをloadするときを想定しているため.
-    if  ((r == rz1) && abs(i - iz1) > 1  && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
-        lines!(ax, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+if (length(keys(transfer_resource)) != length(keys(st))) 
+    for (count, (r, i)) in enumerate(keys(st))
+        if transfer_resource[r,i,2] == 1
+            if (i <= N[r])
+                lines!(ax2, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
+                text!(ax2, st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+                
+                barplot!(axbottom, 2, st[r,i] + D[r,i], fillto = st[r,i], direction = :x, color = colors[r])
+            end
 
-        start = st[rz1,iz1] + E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1]
-        stop = st[r,i]
-        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[rz1])
-    elseif iz1 == N[rz1]
-        lines!(ax, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
+            if ((r == rz1) && abs(i - iz1) > 1 && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
+                lines!(ax2, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 2, st[r,i], fillto = st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], direction = :x, color = colors[rz1])
+            elseif iz1 == N[rz1]
+                lines!(ax2, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 2, st[r,i], fillto = st[rz1,iz1], direction = :x, color = colors[rz1])
+            end
 
-        start = st[rz1,iz1]
-        stop =  st[r,i]
-        barplot!(axbottom, 1, stop, fillto =start , direction = :x, color = c[rz1])
+            if (i <= N[r])
+                println("actual_time[$(r),$(i)] = ", at[r,i])
+                if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
+                    lines!(ax2, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                else
+                    lines!(ax2, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                    lines!(ax2, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                end
+            end
+
+            text!(ax2, st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
+
+            rz1 = r
+            iz1 = i
+        end
     end
-
-    # 横棒は色付き
-    if (i <= N[r])
-        println("actual_time[$(r),$(i)] = ", at[r,i])
-    # 同じパーツが次のところに移動するときは実線
-    if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
-        lines!(ax, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
-    else
-        lines!(ax, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
-        lines!(ax, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = c[r]) 
-    end
-    end
-
-    text!(ax,st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
-
-    global rz1 = r
-    global iz1 = i
-
 end
-rowsize!(fig.layout,2, Auto(0.1))
-fig
+#############################################################################################################
+    rz1 = 1
+    iz1 = 1
+    for (count, (r, i, k)) in enumerate(keys(sort(transfer_resource; byvalue = true)))
+        if k == 1
+            if (i <= N[r])
+                lines!(ax3, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
+                text!(ax3, st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+                
+                barplot!(axbottom, 1, st[r,i] + D[r,i], fillto = st[r,i], direction = :x, color = colors[r])
+            end
+
+            if ((r == rz1) && abs(i - iz1) > 1 && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
+                lines!(ax3, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 1, st[r,i], fillto = st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], direction = :x, color = colors[rz1])
+            elseif iz1 == N[rz1]
+                lines!(ax3, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 1, st[r,i], fillto = st[rz1,iz1], direction = :x, color = colors[rz1])
+            end
+
+            if (i <= N[r])
+                println("actual_time[$(r),$(i)] = ", at[r,i])
+                if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
+                    lines!(ax3, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                else
+                    lines!(ax3, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                    lines!(ax3, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                end
+            end
+
+            text!(ax3, st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
+
+            rz1 = r
+            iz1 = i
+        end
+    end
+
+    rz1 = 1
+    iz1 = 1
+
+    for (count, (r, i, k)) in enumerate(keys(sort(transfer_resource; byvalue = true)))
+        if k == 2
+            if (i <= N[r])
+                lines!(ax3, [st[r,i], st[r,i] + D[r,i]], [V[r,i], V[r,i+1]]; color = :black)
+                text!(ax3, st[r,i] + D[r,i], V[r,i+1], text="$(st[r,i] + D[r,i])", align = (:left, :bottom))
+                
+                barplot!(axbottom, 2, st[r,i] + D[r,i], fillto = st[r,i], direction = :x, color = colors[r])
+            end
+
+            if ((r == rz1) && abs(i - iz1) > 1 && iz1 <= N[rz1]) || (r != rz1) && iz1 <= N[rz1] && count != 1 && count != length(st)
+                lines!(ax3, [st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], st[r,i]], [V[rz1,iz1+1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 2, st[r,i], fillto = st[rz1,iz1]+E[V[rz1,iz1+1],V[rz1,iz1+1]]+D[rz1,iz1], direction = :x, color = colors[rz1])
+            elseif iz1 == N[rz1]
+                lines!(ax3, [st[rz1,iz1], st[r,i]], [V[rz1,iz1], V[r,i]], linestyle = :dash; color = :black)
+                barplot!(axbottom, 2, st[r,i], fillto = st[rz1,iz1], direction = :x, color = colors[rz1])
+            end
+
+            if (i <= N[r])
+                println("actual_time[$(r),$(i)] = ", at[r,i])
+                if cycletime > (st[r,i] - at[r,i]) && (st[r,i] - at[r,i]) > 0
+                    lines!(ax3, [st[r,i] - at[r,i], st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                else
+                    lines!(ax3, [0, st[r,i] ], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                    lines!(ax3, [cycletime + (st[r,i] - at[r,i]), cycletime], [V[r,i] + (r-1)*0.025, V[r,i] + (r-1)*0.025]; color = colors[r]) 
+                end
+            end
+
+            text!(ax3, st[r,i], V[r,i], text="r$(r),i$(i) $(st[r,i])", align = (:left, :top))
+
+            rz1 = r
+            iz1 = i
+        end
+    end
+##################################################################################################
+
+    rowsize!(fig.layout, 4, Auto(0.1))
+    
+    return fig
+end
+
+# 描画処理を関数として呼び出す
+fig = plot_schedule(st, rt, at, V, L, U, E, D, N, cycletime, transfer_resource)
